@@ -1,0 +1,292 @@
+---
+title: "Data Science Capstone Project: Milestone Report"
+author: "Shamik Mitra"
+date: "April 30, 2016"
+output:
+  html_document:
+    highlight: espresso
+    theme: cosmo
+---
+
+While the number of mobile devices have grown exponentially over the years, one challenge users have felt is the inability to type with the same deftness as one would on a full computer keyboard. One way to simplify the typing experience is to provide users an alternative to typing whole words. [SwiftKey](https://swiftkey.com/) has developed a solution where a software learns the typing patterns of a particular user, and along with a knowledge of the language, it is able to suggest the top 3 most probably next words that the user wants to type.
+
+This assignment is a subset of that technology, where the prediction software is trained just on a large corpus of text in English, Finnish, German and Russian. Data has been provided by SwiftKey for the 4 languages from blogs, news and twitter feeds. This report is the result of the initial analysis done on the data. This analysis tests not only our knowledge of data science algorithms, but also forces us to deal with real world data science problems, like anomalies in the data and computer memory management.
+
+_Important: While this document has been written in R Markdown and contains all the code for loading the data and performing the initial analysis, the code has been hidden to make the report readable for non-technical readers. If required, feel free to access the source code in [Github Repo](https://github.com/shamikmitra/Capstone/tree/master/MilestoneReport)._
+
+```{r function_definitions, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+# The Java option is set to use 32GB of RAM, instead of the default.
+# This should be altered based on the hardware being used
+options(java.parameters = "-Xmx32g")
+
+# Load required libraries
+library(tm)
+library(RWeka)
+library(ngram)
+library(stringi)
+library(stringr)
+
+# This function is used to separate sentences based on period, colons, semicolons and quotes
+# The input is a character vector, and the output is a cleaned character vector
+SplitSentences <- function(x) {
+    x <- unlist(strsplit(x, split = ".", fixed = TRUE))
+    x <- unlist(strsplit(x, split = ":", fixed = TRUE))
+    x <- unlist(strsplit(x, split = ";", fixed = TRUE))
+    x <- unlist(strsplit(x, split = '"', fixed = TRUE))
+    x <- x[!x %in% c(" ","")]
+    x
+}
+
+CleanText <- function(x) {
+  x <- stri_trans_tolower(x)
+  x <- str_replace_all(x,"[[:punct:]]","")
+  x <- gsub("\\d","",x)
+  x <- gsub("    "," ",x)
+  x <- gsub("   "," ",x)
+  x <- gsub("  "," ",x)
+  x <- gsub("[^[:alnum:]///' ]", "", x)
+  x <- gsub(intToUtf8(226),intToUtf8(39),x)
+  x <- paste(x, collapse = ".")
+}
+
+
+# This function uses the tm library to create and then clean the corpus. Only a sample of the text is used
+# The input is a character vector, and the number of lines to be taken for the sample. If the number of
+# lines is marked as a negative number, then the entire string is taken for creating the corpus. The output
+# is a corpus with numbers, punctuations and white spaces removed
+CleanCorpus <- function(inpstring, fileappend) {
+write.csv("a", file=paste("5-1-collapse",fileappend))
+    inpstring <- paste(inpstring, collapse = ".")
+write.csv("a", file=paste("5-2-removenonlatin",fileappend))
+    inpstring <- gsub("[^[:alnum:]///' ]", "", inpstring)
+write.csv("a", file=paste("5-3-removesinglequote",fileappend))
+    inpstring <- gsub(intToUtf8(226),intToUtf8(39),inpstring)
+write.csv("a", file=paste("5-5-createcorpus",fileappend))
+    corp <- Corpus(VectorSource(inpstring))
+write.csv("a", file=paste("5-6-tolower",fileappend))
+    corp <- tm_map(corp, content_transformer(tolower))
+write.csv("a", file=paste("5-7-removenum",fileappend))
+    corp <- tm_map(corp, removeNumbers)
+write.csv("a", file=paste("5-8-removepunct",fileappend))
+    corp <- tm_map(corp, removePunctuation)
+write.csv("a", file=paste("5-9-removewhite",fileappend))
+    corp <- tm_map(corp, stripWhitespace)
+write.csv("a", file=paste("5-10-convert2txt",fileappend))
+    corp <- tm_map(corp, PlainTextDocument)
+write.csv("a", file=paste("5-11-end",fileappend))
+    corp
+}
+
+# This function is used to calculate the number of words in the Corpus. Input is a corpus and output is
+# is a numeric word count
+WordsInCorpus <- function(corp) {
+    wc <- 0L
+    for(i in 1:length(corp)) if(!corp[[i]]$content %in% c(""," ")) ( wc <- wc + wordcount(corp[[i]]$content) )
+    wc
+}
+```
+```{r english_blogs, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+en_blogs_lines <- as.character(readLines("Data/final/en_US/en_US.blogs.txt"))
+en_blogs_lc <- length(en_blogs_lines)
+en_blogs_lines <- SplitSentences(en_blogs_lines)
+en_blogs_sc <- length(en_blogs_lines)
+en_blogs_wc <- length(strsplit(CleanText(en_blogs_lines),' ')[[1]])
+```
+```{r english_news, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+en_news_lines <- as.character(readLines("Data/final/en_US/en_US.news.txt"))
+en_news_lc <- length(en_news_lines)
+en_news_lines <- SplitSentences(en_news_lines)
+en_news_sc <- length(en_news_lines)
+en_news_wc <- length(strsplit(CleanText(en_news_lines),' ')[[1]])
+```
+```{r english_twitter, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+en_twitter_lines <- as.character(readLines("Data/final/en_US/en_US.twitter.txt"))
+en_twitter_lc <- length(en_twitter_lines)
+en_twitter_lines <- SplitSentences(en_twitter_lines)
+en_twitter_sc <- length(en_twitter_lines)
+en_twitter_wc <- length(strsplit(CleanText(en_twitter_lines),' ')[[1]])
+```
+```{r english_ngrams, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+Tokenizer1 <- function(x) NGramTokenizer(x, Weka_control(min = 1, max = 1))
+Tokenizer2 <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+Tokenizer3 <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+Tokenizer4 <- function(x) NGramTokenizer(x, Weka_control(min = 4, max = 4))
+
+en_lines <- c(en_blogs_lines, en_news_lines, en_twitter_lines)
+en_lines <- sample(en_lines, 100)
+en_corpus <- Corpus(VectorSource(en_lines))
+rm(en_lines)
+top1grams <- head(sort(rowSums(tdm_matrix <- as.matrix(removeSparseTerms(TermDocumentMatrix(en_corpus, control = list(tokenize = Tokenizer1)),0.1))), decreasing = TRUE), n=5)
+write.csv("a", file="6-4-2gram_en")
+top2grams <- head(sort(rowSums(tdm_matrix <- as.matrix(removeSparseTerms(TermDocumentMatrix(en_corpus, control = list(tokenize = Tokenizer2)),0.1))), decreasing = TRUE), n=5)
+top3grams <- head(sort(rowSums(tdm_matrix <- as.matrix(removeSparseTerms(TermDocumentMatrix(en_corpus, control = list(tokenize = Tokenizer3)),0.1))), decreasing = TRUE), n=5)
+top4grams <- head(sort(rowSums(tdm_matrix <- as.matrix(removeSparseTerms(TermDocumentMatrix(en_corpus, control = list(tokenize = Tokenizer4)),0.1))), decreasing = TRUE), n=5)
+
+wc <- WordsInCorpus(en_corpus)
+top1grams <- top1grams*100/wc
+top2grams <- top2grams*100/wc
+top3grams <- top3grams*100/wc
+top4grams <- top4grams*100/wc
+
+```
+```{r finnish_blogs, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+fi_blogs_lines <- as.character(readLines("Data/final/fi_FI/fi_FI.blogs.txt"))
+fi_blogs_lc <- length(fi_blogs_lines)
+fi_blogs_lines <- SplitSentences(fi_blogs_lines)
+fi_blogs_sc <- length(fi_blogs_lines)
+fi_blogs_wc <- length(strsplit(CleanText(fi_blogs_lines),' ')[[1]])
+```
+```{r finnish_news, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+fi_news_lines <- as.character(readLines("Data/final/fi_FI/fi_FI.news.txt"))
+fi_news_lc <- length(fi_news_lines)
+fi_news_lines <- SplitSentences(fi_news_lines)
+fi_news_sc <- length(fi_news_lines)
+fi_news_wc <- length(strsplit(CleanText(fi_news_lines),' ')[[1]])
+```
+```{r finnish_twitter, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+fi_twitter_lines <- as.character(readLines("Data/final/fi_FI/fi_FI.twitter.txt"))
+fi_twitter_lc <- length(fi_twitter_lines)
+fi_twitter_lines <- SplitSentences(fi_twitter_lines)
+fi_twitter_sc <- length(fi_twitter_lines)
+fi_twitter_wc <- length(strsplit(CleanText(fi_twitter_lines),' ')[[1]])
+```
+```{r german_blogs, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+de_blogs_lines <- as.character(readLines("Data/final/de_DE/de_DE.blogs.txt"))
+de_blogs_lc <- length(de_blogs_lines)
+de_blogs_lines <- SplitSentences(de_blogs_lines)
+de_blogs_sc <- length(de_blogs_lines)
+de_blogs_wc <- length(strsplit(CleanText(de_blogs_lines),' ')[[1]])
+```
+```{r german_news, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+de_news_lines <- as.character(readLines("Data/final/de_DE/de_DE.news.txt"))
+de_news_lc <- length(de_news_lines)
+de_news_lines <- SplitSentences(de_news_lines)
+de_news_sc <- length(de_news_lines)
+de_news_wc <- length(strsplit(CleanText(de_news_lines),' ')[[1]])
+```
+```{r german_twitter, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+de_twitter_lines <- as.character(readLines("Data/final/de_DE/de_DE.twitter.txt"))
+de_twitter_lc <- length(de_twitter_lines)
+de_twitter_lines <- SplitSentences(de_twitter_lines)
+de_twitter_sc <- length(de_twitter_lines)
+de_twitter_wc <- length(strsplit(CleanText(de_twitter_lines),' ')[[1]])
+```
+```{r russian_blogs, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+ru_blogs_lines <- as.character(readLines("Data/final/ru_RU/ru_RU.blogs.txt"))
+ru_blogs_lc <- length(ru_blogs_lines)
+ru_blogs_lines <- SplitSentences(ru_blogs_lines)
+ru_blogs_sc <- length(ru_blogs_lines)
+ru_blogs_wc <- length(strsplit(CleanText(ru_blogs_lines),' ')[[1]])
+```
+```{r russian_news, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+ru_news_lines <- as.character(readLines("Data/final/ru_RU/ru_RU.news.txt"))
+ru_news_lc <- length(ru_news_lines)
+ru_news_lines <- SplitSentences(ru_news_lines)
+ru_news_sc <- length(ru_news_lines)
+ru_news_wc <- length(strsplit(CleanText(ru_news_lines),' ')[[1]])
+```
+```{r russian_twitter, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+ru_twitter_lines <- as.character(readLines("Data/final/ru_RU/ru_RU.twitter.txt"))
+ru_twitter_lc <- length(ru_twitter_lines)
+ru_twitter_lines <- SplitSentences(ru_twitter_lines)
+ru_twitter_sc <- length(ru_twitter_lines)
+ru_twitter_wc <- length(strsplit(CleanText(ru_twitter_lines),' ')[[1]])
+```
+
+#<font color="darkorchid">Exploratory Analysis</font>
+At a high level, the data is loaded from each file, lines and words counted, cleaned, combined into one large string, and then analyzed to identify the top occuring n-grams (explained below). Here are the high level statistics for the individual data files.
+
+
+Language | Source  | Lines | Sentences | Words | Words per Line
+---------|---------|-------|-----------|-------|---------------
+English  | Blogs   | `r prettyNum(en_blogs_lc,big.mark=",", preserve.width="none")` | `r prettyNum(en_blogs_sc,big.mark=",", preserve.width="none")` | `r prettyNum(en_blogs_wc,big.mark=",", preserve.width="none")` | `r round(en_blogs_wc / en_blogs_lc, 0)`
+|        | News    | `r prettyNum(en_news_lc,big.mark=",", preserve.width="none")` | `r prettyNum(en_news_sc,big.mark=",", preserve.width="none")` | `r prettyNum(en_news_wc,big.mark=",", preserve.width="none")` | `r round(en_news_wc / en_news_lc, 0)`
+|        | Twitter | `r prettyNum(en_twitter_lc,big.mark=",", preserve.width="none")` | `r prettyNum(en_twitter_sc,big.mark=",", preserve.width="none")` | `r prettyNum(en_twitter_wc,big.mark=",", preserve.width="none")` | `r round(en_twitter_wc / en_twitter_lc, 0)`
+Finnish  | Blogs   | `r prettyNum(fi_blogs_lc,big.mark=",", preserve.width="none")` | `r prettyNum(fi_blogs_sc,big.mark=",", preserve.width="none")` | `r prettyNum(fi_blogs_wc,big.mark=",", preserve.width="none")` | `r round(fi_blogs_wc / fi_blogs_lc, 0)`
+|        | News    | `r prettyNum(fi_news_lc,big.mark=",", preserve.width="none")` | `r prettyNum(fi_news_sc,big.mark=",", preserve.width="none")` | `r prettyNum(fi_news_wc,big.mark=",", preserve.width="none")` | `r round(fi_news_wc / fi_news_lc, 0)`
+|        | Twitter | `r prettyNum(fi_twitter_lc,big.mark=",", preserve.width="none")` | `r prettyNum(fi_twitter_sc,big.mark=",", preserve.width="none")` | `r prettyNum(fi_twitter_wc,big.mark=",", preserve.width="none")` | `r round(fi_twitter_wc / fi_twitter_lc, 0)`
+German   | Blogs   | `r prettyNum(de_blogs_lc,big.mark=",", preserve.width="none")` | `r prettyNum(de_blogs_sc,big.mark=",", preserve.width="none")` | `r prettyNum(de_blogs_wc,big.mark=",", preserve.width="none")` | `r round(de_blogs_wc / de_blogs_lc, 0)`
+|        | News    | `r prettyNum(de_news_lc,big.mark=",", preserve.width="none")` | `r prettyNum(de_news_sc,big.mark=",", preserve.width="none")` | `r prettyNum(de_news_wc,big.mark=",", preserve.width="none")` | `r round(de_news_wc / de_news_lc, 0)`
+|        | Twitter | `r prettyNum(de_twitter_lc,big.mark=",", preserve.width="none")` | `r prettyNum(de_twitter_sc,big.mark=",", preserve.width="none")` | `r prettyNum(de_twitter_wc,big.mark=",", preserve.width="none")` | `r round(de_twitter_wc / de_twitter_lc, 0)`
+Russian  | Blogs   | `r prettyNum(ru_blogs_lc,big.mark=",", preserve.width="none")` | `r prettyNum(ru_blogs_sc,big.mark=",", preserve.width="none")` | `r prettyNum(ru_blogs_wc,big.mark=",", preserve.width="none")` | `r round(ru_blogs_wc / ru_blogs_lc, 0)`
+|        | News    | `r prettyNum(ru_news_lc,big.mark=",", preserve.width="none")` | `r prettyNum(ru_news_sc,big.mark=",", preserve.width="none")` | `r prettyNum(ru_news_wc,big.mark=",", preserve.width="none")` | `r round(ru_news_wc / ru_news_lc, 0)`
+|        | Twitter | `r prettyNum(ru_twitter_lc,big.mark=",", preserve.width="none")` | `r prettyNum(ru_twitter_sc,big.mark=",", preserve.width="none")` | `r prettyNum(ru_twitter_wc,big.mark=",", preserve.width="none")` | `r round(ru_twitter_wc / ru_twitter_lc, 0)`
+
+As observed from the counts above, the total number of words are very large. This means we have to be careful about memory consumption and the deletion of unwanted objects when performing analysis on this data. The words per line for twitter data is the least, which is not surprising given the 140 character limitation. The blogs and news items are obviously longer. The English and Finnish blogs are longer than the news items, but the German and Russian blogs are shorter than the news items.
+
+#<font color="darkorchid">Data Cleansing</font>
+Cleaning the data is an important aspect of this analysis. The following steps were taken to clean the data
+
+1. While a period is an obvious delimiter of the sentences, the colon, semicolon and quotes were also considered as sentence delimiters. The aim of this analysis is to identify the next 3 best words. The text within quotes or after a colons or a semicolon is not necessarily related to in structure to the words before it.
+
+2. For the sake of the analysis, all the text is converted into lower case. While the final suggestion will have to be provided in the case used by the user, the word suggestion is not dependent on the case. In addition, while the news and blogs tend to use proper grammar and case, such can't be expected from the twitter feed.
+
+3. For a similar reason as above, all the punctuation marks are also removed.
+
+4. All the numbers are removed as well, as they dont provide any value to this analysis.
+
+5. Lastly, all the white spaces are removed as well. All the empty lines are also removed to create a clean data set.
+
+#<font color="darkorchid">N-grams</font>
+According to its [Wikipedia page](https://en.wikipedia.org/wiki/N-gram), n-grams are 'a contiguous sequence of n items from a given sequence of text'. We are interested in figuring out the next best words based on what the user has already typed. N-grams come in handy in this case. If we know a particular pattern exists in the language, then that helps us predict the next best word. The figures below show the most commonly occuring ngrams. For the purpose of this part of the analysis, only English is considered and we are looking for the most commonly occuring words, 2 words, 3 words, 4 words and 5 words.
+
+
+```{r charts, message=FALSE, warning=FALSE, echo=FALSE, cache=TRUE}
+par(mfrow=c(2,2), mar = c(8, 4, 2, 2))
+barplot(top1grams, 
+        col = "darkorchid1",
+        border = NA, 
+        ylab = "% of ngrams",
+        ylim = c(0,6),
+        las=2,
+        cex.names = 0.85,
+        cex.axis = 0.85,
+        main = "Num of 1-grams as a % of total words")
+barplot(top2grams, 
+        col = "darkorchid2",
+        border = NA, 
+        ylab = "% of ngrams",
+        ylim = c(0,0.6),
+        las=2,
+        cex.names = 0.85,
+        cex.axis = 0.85,
+        main = "Num of 2-grams as a % of total words")
+barplot(top3grams, 
+        col = "darkorchid3",
+        border = NA, 
+        ylab = "% of ngrams",
+        ylim = c(0,0.2),
+        las=2,
+        cex.names = 0.85,
+        cex.axis = 0.85,
+        main = "Num of 3-grams as a % of total words")
+barplot(top4grams, 
+        col = "darkorchid",
+        border = NA, 
+        ylab = "% of ngrams",
+        ylim = c(0,0.2),
+        las=2,
+        cex.names = 0.85,
+        cex.axis = 0.85,
+        main = "Num of 4-grams as a % of total words")
+
+```
+
+#<font color="darkorchid">Strategy for building the prediction algorithm</font>
+The following strategy will be used to create the prediction algorithm. 
+
+a) For the sake of performance, it will not be wise to consider all possible combination of words for the prediction. The words that occur less frequently will be removed from the analysis.
+
+b) A database will be created with each of the n-grams and the next best set of words. This will be done only once.
+
+c) The online application will be a simple one, with a user input and an output based on that. As the user enter the text, the application will check for the existence of the phrase in the ngram table. First, the comparison will be made with the 5-gram set. If not found, then with the 4-gram and so on. If none of the phrases are found, then there will be no prompted response.
+
+Whie not part of this analysis, the ideal application will contain additional logic for
+
+a) Auto identifying language based on the words typed
+
+b) Spell checking
+
+c) Retraining the software based on user input over a period of time.
+
+Note: This report was run on an Amazon Web Service 64-bit Windows Server R2 instance with a 32 GB RAM.
